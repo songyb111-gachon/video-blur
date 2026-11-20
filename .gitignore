@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+# work folders and media stay out of the repository
+work*/
+*.mp4
+*.mov
+*.mkv
+*.jpg
+*.png
+*.onnx
+*.pt

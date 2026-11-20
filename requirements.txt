@@ -1,0 +1,5 @@
+opencv-python-headless
+numpy
+onnxruntime
+# only for blurall.py detect --people (whole-body mode):
+ultralytics
