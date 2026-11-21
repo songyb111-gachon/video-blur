@@ -13,8 +13,10 @@ import os, sys, glob, shutil, zipfile, subprocess, urllib.request
 HERE = os.path.dirname(os.path.abspath(__file__)); WIN = os.name == 'nt'; MAC = sys.platform == 'darwin'
 VENV = os.path.join(HERE, '.venv'); VPY = os.path.join(VENV, 'Scripts', 'python.exe') if WIN else os.path.join(VENV, 'bin', 'python')
 TOOLS = os.path.join(HERE, 'tools', 'ffmpeg', 'bin')
+TERMUX = 'TERMUX_VERSION' in os.environ or 'com.termux' in sys.prefix      # Android phone, inside the Termux app
+if TERMUX: VPY = sys.executable
 RAW = 'https://raw.githubusercontent.com/songyb111-gachon/video-blur/'
-APP_FILES = ['app.py', 'index.html', 'blurall.py', 'vblur.py', 'requirements.txt']
+APP_FILES = ['app.py', 'index.html', 'blurall.py', 'vblur.py', 'imgblur.py', 'requirements.txt']
 FFMPEG_WIN_ZIP = 'https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip'   # one of the two Windows builds ffmpeg.org links to
 
 def say(s): print(s, flush=True)
@@ -25,14 +27,17 @@ def ok(code): return subprocess.run([VPY, '-c', code], capture_output=True).retu
 def fetch_app(ver):
     """one-file install: put the app files of this version next to this script (kept until a starter for another version is run)"""
     mark = os.path.join(HERE, f'installed-{ver}.txt')
-    if os.path.exists(mark) and all(os.path.exists(os.path.join(HERE, f)) for f in APP_FILES): return
+    have = all(os.path.exists(os.path.join(HERE, f)) for f in APP_FILES); tag = ver[:1] == 'v' and ver[1:2].isdigit()      # a released version never changes; a branch name (main) is fetched again on every start
+    if tag and os.path.exists(mark) and have: return
     say(f'앱 파일을 내려받습니다 ({ver}).')
     try:
         for f in APP_FILES:
             with urllib.request.urlopen(urllib.request.Request(RAW + ver + '/' + f, headers={'User-Agent': 'video-blur-app'}), timeout=60) as r: data = r.read()
             if not data: raise ValueError(f + ' is empty')
             with open(os.path.join(HERE, f + '.new'), 'wb') as o: o.write(data)
-    except Exception as e: die(f'앱 파일을 내려받지 못했습니다. 인터넷 연결을 확인하고 다시 실행해 주세요. ({e})')
+    except Exception as e:
+        if have and not tag: say('새 파일을 받지 못해, 받아 둔 것으로 켭니다.'); return
+        die(f'앱 파일을 내려받지 못했습니다. 인터넷 연결을 확인하고 다시 실행해 주세요. ({e})')
     for f in APP_FILES: os.replace(os.path.join(HERE, f + '.new'), os.path.join(HERE, f))
     for old in glob.glob(os.path.join(HERE, 'installed-*.txt')): os.remove(old)
     with open(mark, 'w') as o: o.write(ver)
@@ -51,9 +56,9 @@ def venv():
 
 def packages():
     pip = [VPY, '-m', 'pip', 'install', '--disable-pip-version-check']; skip = os.path.join(VENV, 'people-install-failed')
-    if not ok('import numpy, onnxruntime'):
-        say('필요한 패키지를 설치합니다 (numpy, onnxruntime).')
-        if not run(pip + ['numpy', 'onnxruntime']): die('패키지를 설치하지 못했습니다. 인터넷 연결을 확인하고 다시 실행해 주세요.')
+    if not ok('import numpy, onnxruntime, PIL'):
+        say('필요한 패키지를 설치합니다 (numpy, onnxruntime, pillow).')
+        if not run(pip + ['numpy', 'onnxruntime', 'pillow']): die('패키지를 설치하지 못했습니다. 인터넷 연결을 확인하고 다시 실행해 주세요.')
     if not ok('import ultralytics') and not os.path.exists(skip) and not os.environ.get('VBLUR_NO_PEOPLE'):
         say('"모든 사람" 방식에 쓰는 패키지를 설치합니다 (ultralytics, torch). 용량이 커서 몇 분 걸립니다.')
         if sys.platform.startswith('linux'): run(pip + ['torch', 'torchvision', '--index-url', 'https://download.pytorch.org/whl/cpu'])   # the default Linux build is the multi-GB GPU one
@@ -62,6 +67,32 @@ def packages():
     if not ok('import cv2'):      # ultralytics brings OpenCV with it; without it, or where that build cannot load (no display libraries), use the headless one
         say('필요한 패키지를 설치합니다 (opencv).')
         if not run(pip + ['opencv-python-headless']) or not ok('import cv2'): die('OpenCV를 설치하지 못했습니다. 위의 오류를 확인해 주세요.')
+
+def termux_packages():
+    """Android (Termux): packages with native code come from Termux's own package manager, because pip has no ready-made builds for Android.
+    No .venv is used. This path has not been run on a phone yet; the package names below are tried in turn."""
+    pkg = lambda *names: run(['pkg', 'install', '-y'] + list(names))
+    need = ['numpy', 'PIL', 'cv2', 'onnxruntime']; missing = [m for m in need if not ok('import ' + m)]
+    if missing or not shutil.which('ffmpeg'):
+        say('필요한 것을 Termux 패키지로 설치합니다. 몇 분 걸립니다.'); run(['pkg', 'update', '-y'])
+        if not shutil.which('ffmpeg'): pkg('ffmpeg')
+        if 'numpy' in missing: pkg('python-numpy')
+        if 'PIL' in missing: pkg('python-pillow')
+        if 'cv2' in missing:
+            pkg('python-opencv-python')
+            if not ok('import cv2'): pkg('x11-repo'); pkg('opencv-python')      # x11-repo is one of Termux's own repositories
+        if 'onnxruntime' in missing:
+            pkg('python-onnxruntime')
+            if not ok('import onnxruntime'):
+                say('onnxruntime이 Termux 기본 저장소에 없습니다. 커뮤니티 저장소 TUR(Termux User Repository)에서 받아 올 수 있습니다.')
+                try: yes = sys.stdin.isatty() and input('TUR을 추가해 설치할까요? [y/N] ').strip().lower() in ('y', 'yes')
+                except EOFError: yes = False
+                if yes:
+                    pkg('tur-repo'); pkg('python-onnxruntime')
+                    if not ok('import onnxruntime'): run([VPY, '-m', 'pip', 'install', 'onnxruntime', '--extra-index-url', 'https://termux-user-repository.github.io/pypi/'])
+    bad = [m for m in need if not ok('import ' + m)]
+    if bad: die('Termux에서 설치하지 못한 것이 있습니다: ' + ', '.join(bad) + '\n위에 나온 오류와 함께 저장소의 Issues에 알려 주세요.')
+    if shutil.which('termux-wake-lock'): run(['termux-wake-lock'])      # keep working while the screen is off
 
 def ffmpeg_dirs():
     d = [TOOLS]; la = os.environ.get('LOCALAPPDATA', '')
@@ -101,11 +132,12 @@ def ffmpeg():
         if not have_ffmpeg(): download_ffmpeg_win()
     elif MAC:
         if shutil.which('brew'): run(['brew', 'install', 'ffmpeg'])
+    elif TERMUX: run(['pkg', 'install', '-y', 'ffmpeg'])
     elif sys.stdin.isatty():
         for mgr, cmd in (('apt-get', ['sudo', 'apt-get', 'install', '-y', 'ffmpeg']), ('dnf', ['sudo', 'dnf', 'install', '-y', 'ffmpeg']), ('pacman', ['sudo', 'pacman', '-S', '--noconfirm', 'ffmpeg'])):
             if shutil.which(mgr): say('관리자 암호를 물을 수 있습니다: ' + ' '.join(cmd)); run(cmd); break
     if not have_ffmpeg():
-        die('ffmpeg를 자동으로 설치하지 못했습니다. 직접 설치한 뒤 다시 실행해 주세요.\n  윈도우: winget install Gyan.FFmpeg\n  macOS: brew install ffmpeg\n  우분투: sudo apt install ffmpeg')
+        die('ffmpeg를 자동으로 설치하지 못했습니다. 직접 설치한 뒤 다시 실행해 주세요.\n  윈도우: winget install Gyan.FFmpeg\n  macOS: brew install ffmpeg\n  우분투: sudo apt install ffmpeg\n  Termux: pkg install ffmpeg')
 
 def main():
     for s in (sys.stdout, sys.stderr):
@@ -114,7 +146,10 @@ def main():
     if sys.version_info < (3, 9): die(f'Python 3.9 이상이 필요합니다 (지금은 {sys.version.split()[0]}).')
     args = sys.argv[1:]
     if len(args) >= 2 and args[0] == '--install': fetch_app(args[1]); args = args[2:]
-    os.chdir(HERE); venv(); packages(); ffmpeg()
+    os.chdir(HERE)
+    if TERMUX: os.environ.setdefault('VBLUR_LOWMEM', '1'); termux_packages()
+    else: venv(); packages()
+    ffmpeg()
     try: sys.exit(subprocess.call([VPY, os.path.join(HERE, 'app.py')] + args))
     except KeyboardInterrupt: pass
 

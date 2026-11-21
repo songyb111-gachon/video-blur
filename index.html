@@ -3,10 +3,11 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>가림 - 영상 속 사람과 얼굴 가리기</title>
+<title>가림 - 영상과 사진 속 사람·얼굴 가리기</title>
 <style>
 :root{--paper:#e9edf1;--panel:#fff;--ink:#18212c;--mute:#5b6b7c;--line:#d3dae2;--tape:#f2b705;--tape-ink:#2a2100;--frost:#9fb6ca;--ok:#1f7a54;--bad:#b93a26;--r:14px}
 *{box-sizing:border-box}
+[hidden]{display:none!important}
 body{margin:0;background:var(--paper);color:var(--ink);font:16px/1.55 "Pretendard Variable",Pretendard,"Apple SD Gothic Neo","Malgun Gothic","Noto Sans KR",system-ui,sans-serif;-webkit-text-size-adjust:100%}
 button,input,select{font:inherit;color:inherit}
 button{cursor:pointer}
@@ -62,6 +63,7 @@ input[type=range]{width:100%;accent-color:var(--ink)}
 .dot{width:12px;height:12px;border-radius:50%;margin-top:6px;background:var(--line)}
 .done .dot,.skip .dot{background:var(--ok)} .run .dot{background:var(--tape);box-shadow:0 0 0 4px #fdf0c2} .error .dot{background:var(--bad)}
 .alert{background:#f6ded9;color:#7b2416;border-radius:10px;padding:12px 14px;margin:10px 0;word-break:break-word}
+.lan dl{display:grid;grid-template-columns:auto 1fr;gap:6px 16px;margin:12px 0;align-items:baseline}.lan dt{color:var(--mute);font-size:14px}.lan dd{margin:0;font-weight:700;font-variant-numeric:tabular-nums;word-break:break-all}.lan dd.pin{font-size:26px;letter-spacing:.14em}
 .note{background:#fdf6dc;border-radius:10px;padding:10px 14px;margin:10px 0;font-size:15px}
 .facts{list-style:none;margin:12px 0;padding:0}
 .facts li{padding:5px 0 5px 26px;position:relative}
@@ -99,7 +101,7 @@ input[type=text]{padding:9px 11px;border-radius:8px;border:1.5px solid var(--lin
 </head>
 <body>
 <svg width="0" height="0" style="position:absolute"><defs><filter id="bl" x="-30%" y="-30%" width="160%" height="160%"><feGaussianBlur stdDeviation="2.4"/></filter></defs></svg>
-<header class="top"><a class="brand" href="#/">가림</a><span class="sub">영상 속 사람과 얼굴 가리기</span></header>
+<header class="top"><a class="brand" href="#/">가림</a><span class="sub">영상과 사진 속 사람·얼굴 가리기</span></header>
 <main id="app"></main>
 <script>
 const $ = (s, r = document) => r.querySelector(s), $$ = (s, r = document) => [...r.querySelectorAll(s)];
@@ -126,9 +128,9 @@ let ST = null, JOB = null, JID = null, F = null, P = null, HIDE = {}, timer = nu
 // ---------- home
 async function home() {
   JID = null; JOB = null; clearInterval(timer);
-  app.innerHTML = `<div class="drop" id="drop" tabindex="0" role="button"><b>가릴 영상을 여기에 놓으세요</b><div class="mute">또는 눌러서 파일 고르기</div>
-    <input type="file" id="file" accept="video/*,.mkv,.mov,.mp4,.m4v" hidden><div id="up" style="max-width:420px;margin:14px auto 0"></div></div>
-    <div id="pathbox"></div><div id="tools"></div><h2 style="margin-top:28px">올린 영상</h2><div class="jobs" id="list"></div>`;
+  app.innerHTML = `<div class="drop" id="drop" tabindex="0" role="button"><b>가릴 영상이나 사진을 여기에 놓으세요</b><div class="mute">또는 눌러서 파일 고르기</div>
+    <input type="file" id="file" accept="video/*,image/*,.mkv,.mov,.mp4,.m4v" hidden><div id="up" style="max-width:420px;margin:14px auto 0"></div></div>
+    <div id="pathbox"></div><div id="lanbox"></div><div id="tools"></div><h2 style="margin-top:28px">올린 파일</h2><div class="jobs" id="list"></div>`;
   const drop = $('#drop'), file = $('#file');
   drop.onclick = () => file.click(); drop.onkeydown = e => { if (e.key === 'Enter' || e.key === ' ') file.click(); };
   file.onchange = () => file.files[0] && upload(file.files[0]);
@@ -150,6 +152,20 @@ function toolsHtml(t) {
   if (!t.ultralytics) miss.push('"모든 사람" 방식에 필요한 패키지(ultralytics)가 설치되지 않았습니다. 앱 폴더의 .venv 폴더를 지우고 다시 실행하면 설치를 다시 시도합니다.');
   return miss.map(m => `<div class="note">${esc(m)}</div>`).join('');
 }
+function lanDraw() {      // switch for letting phones and other devices on the same network use the app; only shown on the machine that runs it
+  const box = $('#lanbox'), l = ST.lan; if (!box || !ST.local || !l) return;
+  const sig = JSON.stringify(l); if (box.dataset.sig === sig) return; box.dataset.sig = sig;
+  box.innerHTML = l.on ? `<div class="panel lan"><b>다른 기기 접속이 켜져 있습니다</b>
+      <dl><dt>주소</dt><dd>${esc(l.url)}</dd><dt>PIN</dt><dd class="pin">${esc(l.pin)}</dd></dl>
+      <p class="small mute">같은 와이파이에 연결된 휴대폰이나 다른 기기의 브라우저에서 위 주소를 열고 PIN을 입력하세요. 열리지 않으면 이 기기의 방화벽이 Python의 연결을 막고 있는지 확인하세요. 끄면 접속해 있던 기기는 모두 끊깁니다.</p>
+      <button class="btn sm ghost" id="lansw">다른 기기 접속 끄기</button><div id="lanerr"></div></div>`
+    : `<details><summary>휴대폰이나 다른 기기에서 접속하기</summary><p class="small mute" style="margin:8px 0">같은 와이파이에 있는 기기에서 이 앱을 쓸 수 있게 엽니다. 접속하는 기기는 여기 표시되는 PIN을 입력해야 합니다.</p>
+      <button class="btn sm" id="lansw">다른 기기 접속 켜기</button><div id="lanerr"></div></details>`;
+  $('#lansw').onclick = async () => {
+    $('#lansw').disabled = true;
+    try { ST.lan = await api('/api/lan', {on: !l.on}); lanDraw(); } catch (e) { $('#lansw').disabled = false; $('#lanerr').innerHTML = `<div class="alert">${esc(e.message)}</div>`; }
+  };
+}
 async function homeTick() {
   try { ST = await api('/api/status'); } catch (e) { return; }
   if (JID) return;
@@ -158,12 +174,13 @@ async function homeTick() {
     $('#pathbox').innerHTML = `<details><summary>이 PC에 있는 파일을 복사하지 않고 열기</summary><div class="row" style="margin-top:8px"><input type="text" id="path" placeholder="예: C:\\Users\\me\\Videos\\clip.mp4" style="flex:1;min-width:200px"><button class="btn sm" id="openp">열기</button></div><div id="perr"></div></details>`;
     $('#openp').onclick = async () => { try { const d = await api('/api/open', {path: $('#path').value}); location.hash = '#/job/' + d.id; } catch (e) { $('#perr').innerHTML = `<div class="alert">${esc(e.message)}</div>`; } };
   }
+  lanDraw();
   $('#list').innerHTML = ST.jobs.length ? ST.jobs.map(j => {
     const i = j.info, t = j.task, run = t && (t.state === 'running' || t.state === 'queued');
     const tag = run ? `<span class="tag run">${esc(t.state === 'queued' ? '대기 중' : (t.step || '작업 중'))}</span>` : t && t.state === 'error' ? '<span class="tag bad">오류</span>' : j.has_result ? '<span class="tag ok">완성</span>' : '';
     return `<a href="#/job/${j.id}">${i ? `<img src="/api/job/${j.id}/f/scrub/s_${String(Math.floor(i.scrub.n / 2)).padStart(4, '0')}.jpg" alt="">` : '<img alt="">'}
-      <div><div class="n">${esc(j.name)}</div><div class="small mute num">${i ? `${i.W}×${i.H} &nbsp; ${fmtT(i.duration)}` : '읽는 중'}</div></div><div>${tag}</div></a>`;
-  }).join('') : '<p class="mute">아직 없습니다. 위에 영상을 올리면 여기에 쌓입니다.</p>';
+      <div><div class="n">${esc(j.name)}</div><div class="small mute num">${i ? `${i.W}×${i.H} &nbsp; ${i.image ? '사진' : fmtT(i.duration)}` : '읽는 중'}</div></div><div>${tag}</div></a>`;
+  }).join('') : '<p class="mute">아직 없습니다. 위에 영상이나 사진을 올리면 여기에 쌓입니다.</p>';
 }
 
 // ---------- one video
@@ -171,11 +188,11 @@ const busy = () => JOB && JOB.task && (JOB.task.state === 'queued' || JOB.task.s
 const furl = rel => `/api/job/${JID}/f/${rel}?v=${(JOB.result || {}).run || 0}`;
 async function openJob(id) {
   clearInterval(timer); JID = id; lastSig = ''; P = null; cmpSel = 0; showRange = false;
-  try { JOB = await api('/api/job/' + id); if (!ST) ST = await api('/api/status'); } catch (e) { app.innerHTML = `<a class="back" href="#/">← 영상 목록</a><div class="alert">${esc(e.message)}</div>`; return; }
+  try { JOB = await api('/api/job/' + id); if (!ST) ST = await api('/api/status'); } catch (e) { app.innerHTML = `<a class="back" href="#/">← 목록</a><div class="alert">${esc(e.message)}</div>`; return; }
   const o = JOB.opts || {}, N = JOB.info ? JOB.info.frames : 0;
   F = {mode: o.mode || (JOB.result || {}).mode || null, part: o.a !== undefined && (o.a > 0 || o.b < N - 1), a: o.a || 0, b: o.b !== undefined ? o.b : N - 1, style: o.style || 'blur', level: o.level || 'mid',
        quality: o.quality || 'high', hdr10p: o.hdr10p !== false, bright: 0, step: o.step || 2};
-  app.innerHTML = `<a class="back" href="#/">← 영상 목록</a><div id="jhead"></div><div id="sections"></div>`;
+  app.innerHTML = `<a class="back" href="#/">← 목록</a><div id="jhead"></div><div id="sections"></div>`;
   renderAll(); timer = setInterval(poll, 1200);
 }
 async function poll() {
@@ -187,10 +204,10 @@ async function poll() {
 function renderAll() {
   const t = JOB.task || {}, i = JOB.info;
   lastSig = [t.kind, t.state, (JOB.result || {}).run, !!i, JOB.pick && JOB.pick.ready, JOB.pick && JOB.pick.a, JOB.pick && JOB.pick.b].join('|');
-  $('#jhead').innerHTML = `<h1>${esc(JOB.name)}</h1><div class="small mute num">` + (i ? `<span class="tag">${i.W}×${i.H}</span><span class="tag">${fmtT(i.duration)}</span><span class="tag">${i.frames}프레임</span>${i.hdr ? `<span class="tag">${i.hdr10p ? 'HDR10+' : 'HDR'}</span>` : ''}` : '')
-    + `<button class="btn ghost sm" id="del" style="float:right">이 영상 지우기</button></div>`;
-  if ($('#del')) $('#del').onclick = async () => { if (!confirm('이 영상과 작업 결과를 앱에서 지웁니다. 원본 파일은 그대로 둡니다.')) return; try { await api(`/api/job/${JID}/delete`, {}); location.hash = '#/'; } catch (e) { alert(e.message); } };
-  if (!i) { $('#sections').innerHTML = `<div class="panel" style="clear:both"><h2>${t.state === 'error' || t.state === 'canceled' ? '영상을 읽지 못했습니다' : '영상을 읽는 중입니다'}</h2><div id="prog"></div></div>`; renderProgress(); return; }
+  $('#jhead').innerHTML = `<h1>${esc(JOB.name)}</h1><div class="small mute num">` + (i ? `<span class="tag">${i.W}×${i.H}</span>${i.image ? '<span class="tag">사진</span>' : `<span class="tag">${fmtT(i.duration)}</span><span class="tag">${i.frames}프레임</span>`}${i.hdr ? `<span class="tag">${i.hdr10p ? 'HDR10+' : 'HDR'}</span>` : ''}` : '')
+    + `<button class="btn ghost sm" id="del" style="float:right">앱에서 지우기</button></div>`;
+  if ($('#del')) $('#del').onclick = async () => { if (!confirm('이 파일과 작업 결과를 앱에서 지웁니다. 원본 파일은 그대로 둡니다.')) return; try { await api(`/api/job/${JID}/delete`, {}); location.hash = '#/'; } catch (e) { alert(e.message); } };
+  if (!i) { $('#sections').innerHTML = `<div class="panel" style="clear:both"><h2>${t.state === 'error' || t.state === 'canceled' ? '파일을 읽지 못했습니다' : '파일을 읽는 중입니다'}</h2><div id="prog"></div></div>`; renderProgress(); return; }
   if (F.b === undefined || F.b < 0) F.b = i.frames - 1;
   $('#sections').innerHTML = `<section class="sec"><div class="no">1</div><div><h2>무엇을 가릴까요</h2><div class="modes" id="modes"></div></div></section>
     <section class="sec"><div class="no">2</div><div><h2>설정</h2><div id="setup"></div></div></section>
@@ -224,13 +241,13 @@ function optsHtml(detectOpts) {
   const seg = (key, items) => `<div class="seg" data-k="${key}">${items.map(([v, l]) => `<button data-v="${v}" class="${F[key] === v ? 'on' : ''}">${l}</button>`).join('')}</div>`;
   return `<div class="opt"><label>가리는 방식</label><div>${seg('style', [['blur', '블러'], ['mosaic', '모자이크']])}</div>
     <label>세기</label><div>${seg('level', [['low', '약하게'], ['mid', '보통'], ['high', '강하게']])}</div>
-    <label>화질</label><div><select id="quality"><option value="high">원본에 가깝게 (파일 큼)</option><option value="mid">보통</option><option value="small">파일 작게</option></select></div>
+    ${JOB.info.image ? '' : '<label>화질</label><div><select id="quality"><option value="high">원본에 가깝게 (파일 큼)</option><option value="mid">보통</option><option value="small">파일 작게</option></select></div>'}
     ${JOB.info.hdr10p ? `<label>HDR10+</label><div><label><input type="checkbox" id="hdr10p" ${F.hdr10p ? 'checked' : ''}> 원본의 HDR10+ 정보를 그대로 넣기</label></div>` : ''}
     ${detectOpts ? `<label>어두운 영상</label><div><select id="bright"><option value="0">자동 밝기 보정</option><option value="0.5">조금 더 밝게 보고 찾기</option><option value="1">훨씬 더 밝게 보고 찾기</option></select></div>` : ''}</div>`;
 }
 function optsWire(root) {
   $$('.seg', root).forEach(g => $$('button', g).forEach(b => b.onclick = () => { F[g.dataset.k] = b.dataset.v; $$('button', g).forEach(x => x.classList.toggle('on', x === b)); }));
-  const q = $('#quality', root); q.value = F.quality; q.onchange = () => F.quality = q.value;
+  const q = $('#quality', root); if (q) { q.value = F.quality; q.onchange = () => F.quality = q.value; }
   const h = $('#hdr10p', root); if (h) h.onchange = () => F.hdr10p = h.checked;
   const br = $('#bright', root); if (br) { br.value = String(F.bright); br.onchange = () => F.bright = +br.value; }
 }
@@ -239,10 +256,10 @@ function renderSetup() {
   if (!F.mode) { el.innerHTML = '<p class="mute">위에서 방식을 하나 고르세요.</p>'; return; }
   if (F.mode === 'pick') return renderPick(el);
   const per = F.mode === 'people' ? 3.6 : 1.6;
-  el.innerHTML = `<div class="panel"><div class="opt"><label>구간</label><div><div class="seg" id="partseg"><button data-v="0" class="${F.part ? '' : 'on'}">영상 전체</button><button data-v="1" class="${F.part ? 'on' : ''}">일부만</button></div></div></div>
-    <div id="rangebox" style="margin:12px 0" ${F.part ? '' : 'hidden'}>${rangeHtml()}</div>${optsHtml(true)}
+  el.innerHTML = `<div class="panel"><div ${i.image ? 'hidden' : ''}><div class="opt"><label>구간</label><div><div class="seg" id="partseg"><button data-v="0" class="${F.part ? '' : 'on'}">영상 전체</button><button data-v="1" class="${F.part ? 'on' : ''}">일부만</button></div></div></div>
+    <div id="rangebox" style="margin:12px 0" ${F.part ? '' : 'hidden'}>${rangeHtml()}</div></div>${optsHtml(true)}
     <div class="row" style="margin-top:18px"><button class="btn" id="go">${JOB.result && JOB.result.mode === F.mode ? '다시 만들기' : '블러 시작'}</button><span class="small mute" id="est"></span></div><div id="goerr"></div></div>`;
-  const estUpd = () => { const n2 = F.part ? F.b - F.a + 1 : i.frames; $('#est').textContent = `처음 찾을 때 ${fmtLeft(n2 * per * 2 / Math.max(2, (ST || {}).cores || 2) + i.frames / 3)} 걸립니다. PC 성능에 따라 달라집니다.`; };
+  const estUpd = () => { if (i.image) { $('#est').textContent = F.mode === 'people' ? '1~2분 걸립니다.' : '보통 1분 안에 끝납니다.'; return; } const n2 = F.part ? F.b - F.a + 1 : i.frames; $('#est').textContent = `처음 찾을 때 ${fmtLeft(n2 * per * 2 / Math.max(2, (ST || {}).cores || 2) + i.frames / 3)} 걸립니다. PC 성능에 따라 달라집니다.`; };
   rangeWire(estUpd); optsWire(el);
   $$('#partseg button').forEach(b => b.onclick = () => { F.part = b.dataset.v === '1'; $$('#partseg button').forEach(x => x.classList.toggle('on', x === b)); $('#rangebox').hidden = !F.part; estUpd(); });
   $('#go').onclick = () => startBlur();
@@ -277,6 +294,10 @@ function renderProgress() {
 function renderResult() {
   const r = JOB.result, s4 = $('#s4'); if (!s4) return; s4.hidden = !r; if (!r) return;
   const facts = [], warn = (c, okT, badT) => facts.push(c ? `<li>${okT}</li>` : `<li class="warn">${badT}</li>`);
+  if (r.image) {
+    facts.push(`<li>사진의 약 ${r.cover[0]}%가 가려집니다.</li>`); if (r.exact) facts.push('<li>가리지 않은 곳은 원본과 똑같습니다.</li>'); else warn(r.untouched && r.psnr > 35, `가리지 않은 곳은 손대지 않았습니다. ${esc(r.fmt || '')} 형식으로 다시 저장하면서 생긴 아주 작은 차이만 있습니다 (PSNR ${r.psnr} dB).`, '가리지 않은 곳에도 달라진 부분이 있습니다. 결과를 원본과 비교해 보세요.');
+    facts.push('<li>촬영 정보(EXIF)는 결과에 넣지 않았습니다. 위치와 시간, 사진 안에 들어 있던 작은 미리보기 그림이 함께 빠집니다.</li>');
+  } else {
   warn(r.frames_src === r.frames_out && (r.ts_diff_ms || 0) < 1 && !r.problem, `프레임 수와 타이밍이 원본과 같습니다 (${r.frames_out}프레임).`, `프레임 수나 타이밍이 원본과 다릅니다 (원본 ${r.frames_src}, 결과 ${r.frames_out}).`);
   if (r.detail !== null) warn(r.detail < 0.1, `가린 곳에 남은 원본 무늬는 ${(r.detail * 100).toFixed(1)}%입니다.`, `가린 곳에 원본 무늬가 ${(r.detail * 100).toFixed(0)}% 남아 있습니다. 세기를 올려 보세요.`);
   if (r.psnr_med !== null) warn(r.psnr_min > 30, `가리지 않은 곳은 원본과 거의 같습니다 (PSNR ${r.psnr_med} dB).`, `가리지 않은 곳의 화질이 떨어졌습니다 (PSNR 최저 ${r.psnr_min} dB). 화질 설정을 올려 보세요.`);
@@ -285,16 +306,17 @@ function renderResult() {
   else if (JOB.info.hdr10p) facts.push(`<li class="warn">HDR10+ 정보는 넣지 않았습니다${r.hdr10p_copy ? ' (' + esc(r.hdr10p_copy) + ')' : ''}. HDR10은 유지됩니다.</li>`);
   if (r.residual) warn(r.residual.left === 0, '완성본에서 가려지지 않은 얼굴은 다시 잡히지 않았습니다.', `완성본에 얼굴처럼 보이는 곳이 ${r.residual.left}군데 남아 있습니다. 아래 그림에서 실제 얼굴인지 확인하세요.`);
   (r.tracks || []).forEach((t, q) => { const w = t.weak.length + t.jump.length; warn(!w, `대상 ${q + 1}: ${fmtT(t.lo * JOB.info.dt)} ~ ${fmtT(t.hi * JOB.info.dt)} 구간을 따라갔습니다.`, `대상 ${q + 1}: ${fmtT(t.lo * JOB.info.dt)} ~ ${fmtT(t.hi * JOB.info.dt)} 구간을 따라갔지만 ${w}곳에서 놓쳤을 수 있습니다. 비교 그림을 확인하세요.`); });
+  }
   const c = r.cmp[Math.min(cmpSel, r.cmp.length - 1)], sus = (r.mode !== 'pick' && JOB.suspects) || [];
   const sig = JSON.stringify(sus.map(x => [x.id, x.first])); if (HIDE._sig !== sig) HIDE = {_sig: sig};
   sus.forEach(x => { if (HIDE[x.id] === undefined) HIDE[x.id] = r.hidden.includes(x.id); });
-  $('#result').innerHTML = `<div class="panel"><div class="row"><a class="btn" href="/api/job/${JID}/download?mode=${r.mode}" download>영상 내려받기</a><span class="small mute num">${MODES[r.mode][0]} 방식, ${fmtSize(r.size)}, ${fmtLeft(r.took)} 걸림</span></div>
-    <ul class="facts">${facts.join('')}</ul><div class="note">빠짐없이 가려졌다는 보장은 아닙니다. 공개하기 전에 영상을 직접 재생해 확인하세요.</div></div>
-    ${c ? `<div class="panel"><h2>원본과 비교</h2><div class="chips">${r.cmp.map((x, q) => `<button data-q="${q}" class="${q === cmpSel ? 'on' : ''}">${(r.b - r.a) * JOB.info.dt < 4 ? x.t.toFixed(2) + '초' : fmtT(x.t)}</button>`).join('')}</div>
+  $('#result').innerHTML = `<div class="panel"><div class="row"><a class="btn" href="/api/job/${JID}/download?mode=${r.mode}" download>${r.image ? '사진' : '영상'} 내려받기</a><span class="small mute num">${MODES[r.mode][0]} 방식, ${fmtSize(r.size)}, ${fmtLeft(r.took)} 걸림</span></div>
+    <ul class="facts">${facts.join('')}</ul><div class="note">빠짐없이 가려졌다는 보장은 아닙니다. 공개하기 전에 ${r.image ? '결과 사진을 크게 열어' : '영상을 직접 재생해'} 확인하세요.</div></div>
+    ${c ? `<div class="panel"><h2>원본과 비교</h2><div class="chips" ${r.cmp.length > 1 ? '' : 'hidden'}>${r.cmp.map((x, q) => `<button data-q="${q}" class="${q === cmpSel ? 'on' : ''}">${(r.b - r.a) * JOB.info.dt < 4 ? x.t.toFixed(2) + '초' : fmtT(x.t)}</button>`).join('')}</div>
       <div class="pair" style="max-width:${Math.round(2 * 70 * JOB.info.W / JOB.info.H)}vh"><figure><img src="${furl(c.a)}" alt="원본"><figcaption>원본</figcaption></figure><figure><img src="${furl(c.b)}" alt="결과"><figcaption>결과</figcaption></figure></div></div>` : ''}
-    ${sus.length ? `<div class="panel"><h2>얼굴인지 애매한 곳</h2><p class="small mute">조명이나 장식이 얼굴로 잡혔을 수 있습니다. 누르면 가릴지 말지가 바뀝니다. 실제 얼굴일 수 있으면 가림으로 두세요.</p>
-      <div class="tiles">${sus.map(x => `<button class="tile ${HIDE[x.id] ? 'hide' : 'show'}" data-id="${x.id}"><img src="${furl('tiles/s_' + x.id + '.jpg')}" alt=""><div class="st">${HIDE[x.id] ? '가림' : '그대로 둠'}</div><div class="small mute num">${fmtT(x.t)}</div></button>`).join('')}</div>
-      <div class="row" style="margin-top:14px"><button class="btn" id="redo">고른 대로 다시 만들기</button><span class="small mute">찾아 둔 결과를 쓰므로 영상 만드는 시간만 걸립니다.</span></div></div>` : ''}
+    ${sus.length ? `<div class="panel"><h2>${r.image ? '찾은 얼굴' : '얼굴인지 애매한 곳'}</h2><p class="small mute">${r.image ? '누르면 가릴지 말지가 바뀝니다. 남겨 둘 얼굴이나 얼굴이 아닌 것은 "그대로 둠"으로 바꾸세요.' : '조명이나 장식이 얼굴로 잡혔을 수 있습니다. 누르면 가릴지 말지가 바뀝니다. 실제 얼굴일 수 있으면 가림으로 두세요.'}</p>
+      <div class="tiles">${sus.map(x => `<button class="tile ${HIDE[x.id] ? 'hide' : 'show'}" data-id="${x.id}"><img src="${furl('tiles/s_' + x.id + '.jpg')}" alt=""><div class="st">${HIDE[x.id] ? '가림' : '그대로 둠'}</div><div class="small mute num">${r.image ? '' : fmtT(x.t)}</div></button>`).join('')}</div>
+      <div class="row" style="margin-top:14px"><button class="btn" id="redo">고른 대로 다시 만들기</button><span class="small mute">${r.image ? '찾아 둔 결과를 쓰므로 금방 끝납니다.' : '찾아 둔 결과를 쓰므로 영상 만드는 시간만 걸립니다.'}</span></div></div>` : ''}
     ${r.residual && r.residual.image ? `<div class="panel"><h2>완성본에 남은 얼굴 후보</h2><p class="small mute">칸마다 위가 원본, 아래가 완성본입니다. 아래쪽에 얼굴이 또렷하면 놓친 것입니다. 장식이나 이미 흐려진 얼굴의 가장자리는 괜찮습니다.</p><img class="res" src="${furl('wb/res.jpg')}" alt=""></div>` : ''}`;
   $$('#result .chips button').forEach(b => b.onclick = () => { cmpSel = +b.dataset.q; renderResult(); });
   $$('#result .tile').forEach(b => b.onclick = () => { HIDE[b.dataset.id] = !HIDE[b.dataset.id]; renderResult(); });
@@ -320,17 +342,17 @@ function renderPick(el) {
     P = {j: 0, tool: 'box', cur: null, targets: keep ? o.targets.map(t => ({...t, polys: null})) : [], crop: keep && o.crop ? o.crop : null, drag: null, msg: ''};
   }
   const n = Math.floor((pk.b - pk.a) / pk.step) + 1;
-  el.innerHTML = `<div class="panel"><div class="row small mute num" style="margin-bottom:10px"><span>구간 ${fmtT(pk.a * i.dt)} ~ ${fmtT(pk.b * i.dt)}, ${pk.b - pk.a + 1}프레임</span><button class="btn ghost sm" id="chg">구간 바꾸기</button></div>
+  el.innerHTML = `<div class="panel"><div class="row small mute num" style="margin-bottom:10px" ${i.image ? 'hidden' : ''}><span>구간 ${fmtT(pk.a * i.dt)} ~ ${fmtT(pk.b * i.dt)}, ${pk.b - pk.a + 1}프레임</span><button class="btn ghost sm" id="chg">구간 바꾸기</button></div>
     <div class="editor"><div><div class="stage" style="max-width:${Math.round(78 * i.W / i.H)}vh"><img id="pf" alt="" draggable="false"><canvas id="pc"></canvas></div>
-      <input type="range" id="ps" min="0" max="${n - 1}" value="${P.j}" style="margin-top:10px"><div class="small num" id="pl"></div></div>
+      <input type="range" id="ps" min="0" max="${n - 1}" value="${P.j}" style="margin-top:10px" ${i.image ? 'hidden' : ''}><div class="small num" id="pl"></div></div>
       <div><div class="tools"><button data-t="box">① 대상을 감싸는 박스 그리기</button><button data-t="pos">② 대상 위에 점 찍기</button><button data-t="neg">대상이 아닌 곳에 점 찍기</button><button data-t="crop">살펴볼 영역 좁히기 (선택)</button></div>
         <div class="row" style="margin:10px 0"><button class="btn ghost sm" id="seed">윤곽 확인</button><button class="btn sm" id="add">대상으로 추가</button><button class="btn ghost sm" id="clr">지우기</button></div>
         <div class="small" id="pmsg"></div><div id="tgts" style="margin-top:10px"></div></div></div>
-    <p class="small mute">대상이 가장 잘 보이는 프레임으로 옮긴 뒤 박스를 그리고 점을 한두 개 찍으세요. 윤곽이 옆 사람까지 번지면 번진 곳에 "대상이 아닌 곳" 점을 찍습니다. 대상이 화면 일부에만 있으면 영역을 좁히면 윤곽이 더 정확합니다.</p>
+    <p class="small mute">${i.image ? '가릴 대상에' : '대상이 가장 잘 보이는 프레임으로 옮긴 뒤'} 박스를 그리고 점을 한두 개 찍으세요. 윤곽이 옆 사람까지 번지면 번진 곳에 "대상이 아닌 곳" 점을 찍습니다. 대상이 화면 일부에만 있으면 영역을 좁히면 윤곽이 더 정확합니다.</p>
     ${optsHtml(false)}<div class="row" style="margin-top:18px"><button class="btn" id="gopick">블러 시작</button><span class="small mute" id="pest2"></span></div><div id="goerr"></div></div>`;
   optsWire(el); $('#chg').onclick = () => { showRange = true; renderSetup(); };
   const img = $('#pf'), cv = $('#pc'), ps = $('#ps'), frame = () => pk.a + P.j * pk.step;
-  const load = () => { img.src = `/api/job/${JID}/frame?i=${frame()}&w=${Math.min(1280, Math.round(($('.stage').clientWidth || 640) * (window.devicePixelRatio || 1)))}`; $('#pl').textContent = `${fmtT(frame() * i.dt)} (프레임 ${frame()})`; };
+  const load = () => { img.src = `/api/job/${JID}/frame?i=${frame()}&w=${Math.min(1280, Math.round(($('.stage').clientWidth || 640) * (window.devicePixelRatio || 1)))}`; $('#pl').textContent = i.image ? '' : `${fmtT(frame() * i.dt)} (프레임 ${frame()})`; };
   const sx = () => cv.clientWidth / i.W;
   const draw = () => {
     const d = window.devicePixelRatio || 1; cv.width = cv.clientWidth * d; cv.height = cv.clientHeight * d; const g = cv.getContext('2d'); g.scale(d, d); const k = sx(), f = frame();
@@ -349,11 +371,11 @@ function renderPick(el) {
     $$('.tools button', el).forEach(b => b.classList.toggle('on', b.dataset.t === P.tool));
     $('#pmsg').innerHTML = P.msg; const g = n - 0;
     $('#tgts').innerHTML = (P.crop ? `<div class="tgt"><span>살펴볼 영역을 좁혔습니다</span><button id="uncrop">해제</button></div>` : '') +
-      (P.targets.length ? P.targets.map((t, q) => `<div class="tgt"><i style="background:${COLORS[q % 6]}"></i><a href="#" data-go="${q}">대상 ${q + 1} (${fmtT(t.ref * i.dt)})</a><button data-rm="${q}">빼기</button></div>`).join('') : '<div class="small mute">아직 추가한 대상이 없습니다.</div>');
+      (P.targets.length ? P.targets.map((t, q) => `<div class="tgt"><i style="background:${COLORS[q % 6]}"></i><a href="#" data-go="${q}">대상 ${q + 1}${i.image ? '' : ` (${fmtT(t.ref * i.dt)})`}</a><button data-rm="${q}">빼기</button></div>`).join('') : '<div class="small mute">아직 추가한 대상이 없습니다.</div>');
     $$('[data-rm]', el).forEach(b => b.onclick = () => { P.targets.splice(+b.dataset.rm, 1); side(); draw(); });
     $$('[data-go]', el).forEach(a => a.onclick = e => { e.preventDefault(); P.j = (P.targets[+a.dataset.go].ref - pk.a) / pk.step; ps.value = P.j; load(); draw(); });
     const u = $('#uncrop'); if (u) u.onclick = () => { P.crop = null; P.targets.forEach(t => t.polys = null); if (P.cur) P.cur.polys = null; side(); draw(); };
-    $('#gopick').disabled = !P.targets.length; $('#pest2').textContent = P.targets.length ? `화면 분석 ${g}장, 처음엔 ${fmtLeft(g * 20 / Math.max(2, (ST || {}).cores || 2))} 걸립니다.` : '대상을 하나 이상 추가하세요.';
+    $('#gopick').disabled = !P.targets.length; $('#pest2').textContent = P.targets.length && i.image ? '1분 안쪽으로 걸립니다.' : P.targets.length ? `화면 분석 ${g}장, 처음엔 ${fmtLeft(g * 20 / Math.max(2, (ST || {}).cores || 2))} 걸립니다.` : '대상을 하나 이상 추가하세요.';
   };
   const pos = e => { const r = cv.getBoundingClientRect(); return [Math.max(0, Math.min(i.W, (e.clientX - r.left) / r.width * i.W)), Math.max(0, Math.min(i.H, (e.clientY - r.top) / r.height * i.H))]; };
   const cur = () => { if (!P.cur || P.cur.ref !== frame()) P.cur = {ref: frame(), box: null, pts: [], lab: [], polys: null}; return P.cur; };
@@ -372,7 +394,7 @@ function renderPick(el) {
   };
   const seed = async () => {
     const c = P.cur; if (!c || (!c.box && !c.pts.length)) { P.msg = '먼저 박스를 그리거나 점을 찍으세요.'; side(); return false; }
-    P.msg = '윤곽을 계산하는 중입니다. 이 프레임은 처음이면 10~20초 걸립니다.'; side(); $('#seed').disabled = $('#add').disabled = true;
+    P.msg = '윤곽을 계산하는 중입니다. 처음에는 10~20초 걸립니다.'; side(); $('#seed').disabled = $('#add').disabled = true;
     try { const r = await api(`/api/job/${JID}/seed`, {ref: c.ref, box: c.box, pts: c.pts, lab: c.lab, crop: P.crop}); c.polys = r.polys; P.msg = r.polys.length ? '색칠된 부분이 가려질 윤곽입니다. 맞으면 "대상으로 추가"를 누르세요.' : '윤곽을 잡지 못했습니다. 박스와 점을 다시 지정해 보세요.'; return r.polys.length > 0; }
     catch (e) { P.msg = `<span style="color:var(--bad)">${esc(e.message)}</span>`; return false; }
     finally { $('#seed').disabled = $('#add').disabled = false; side(); draw(); }

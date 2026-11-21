@@ -1,5 +1,7 @@
-opencv-python-headless
 numpy
 onnxruntime
-# only for blurall.py detect --people (whole-body mode):
+pillow
+# only for the "all people" mode (it brings OpenCV and torch with it):
 ultralytics
+# only when ultralytics is not installed, or on a machine without display libraries:
+opencv-python-headless

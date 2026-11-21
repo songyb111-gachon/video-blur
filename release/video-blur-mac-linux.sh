@@ -3,7 +3,7 @@
 # It installs Python if it is missing, downloads the app into ~/.local/share/video-blur, lets the app's launch.py
 # install the Python packages and ffmpeg, and opens the app in the browser.  Run it again any time to start the app.
 # To remove everything, delete the folder ~/.local/share/video-blur.
-VER="v1.0.0"
+VER="v1.1.0"
 APP="${XDG_DATA_HOME:-$HOME/.local/share}/video-blur"
 URL="https://raw.githubusercontent.com/songyb111-gachon/video-blur/$VER/launch.py"
 mkdir -p "$APP" || exit 1
