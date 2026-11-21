@@ -4,7 +4,7 @@ __pycache__/
 tools/
 # videos, work folders and results of the app stay out of the repository
 jobs/
-work*/
+/work*/
 *.mp4
 *.mov
 *.mkv

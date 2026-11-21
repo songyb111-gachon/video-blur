@@ -1,2 +1,2 @@
-run.bat -text
+*.bat -text
 *.sh text eol=lf
