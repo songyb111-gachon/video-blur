@@ -2,7 +2,7 @@
 """app.py - a local web app around blurall.py and vblur.py.
 
     python app.py            opens http://127.0.0.1:8765 in the browser of this computer
-    python app.py --lan      also reachable from phones on the same Wi-Fi (asks for the PIN it prints)
+    python app.py --lan      also reachable from phones on the same Wi-Fi (asks for the PIN it prints); the page can switch this on and off too
 
 Videos, work files and results are kept in the "jobs" folder next to this file."""
 import sys, os, re, json, time, math, shutil, queue, socket, secrets, zipfile, argparse, threading, subprocess, urllib.request, urllib.parse, importlib.util
@@ -10,7 +10,7 @@ from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 import numpy as np, cv2
 
 HERE = os.path.dirname(os.path.abspath(__file__)); PY = sys.executable
-BLURALL, VBLUR = os.path.join(HERE, 'blurall.py'), os.path.join(HERE, 'vblur.py')
+BLURALL, VBLUR, IMGBLUR = os.path.join(HERE, 'blurall.py'), os.path.join(HERE, 'vblur.py'), os.path.join(HERE, 'imgblur.py')
 MODELS = os.environ.get('VBLUR_MODELS', os.path.expanduser('~/.cache/vblur'))
 DATA = os.path.join(HERE, 'jobs')
 TONEMAP = "zscale=t=linear:npl=200,format=gbrpf32le,zscale=p=bt709,tonemap=hable:desat=0,zscale=t=bt709:m=bt709:r=tv,"
@@ -25,10 +25,13 @@ LABEL = dict(probe='영상 읽기', overview='미리보기 만들기', models='�
              render='영상 만들기', check='결과 확인', residual='남은 얼굴 찾기', compare='비교 이미지 만들기', frames='구간 불러오기', embed='화면 분석', track='대상 따라가기')
 SUFFIX = dict(faces='faces_blur', people='people_blur', pick='blur')
 VIDEO_EXT = ('.mp4', '.mov', '.m4v', '.mkv', '.webm', '.avi', '.mts', '.ts')
+IMAGE_EXT = ('.jpg', '.jpeg', '.png', '.webp', '.bmp')
 
 JOBS = {}; LOCK = threading.RLock(); Q = queue.Queue(); CUR = dict(job=None, proc=None); SAM = threading.Lock()
 AUTH = dict(pin=None, token=secrets.token_hex(16), fails=0)
+LAN = dict(srv=None, ip=None, port=0); LAN_LOCK = threading.Lock()      # the extra listener other devices connect to (off unless switched on)
 
+NO_PEOPLE = '"모든 사람" 방식에 필요한 ultralytics 패키지가 없습니다. 앱을 끄고 앱 폴더의 .venv 폴더를 지운 뒤 시작 파일을 다시 실행하면 설치합니다. 휴대폰(Termux)에서는 이 방식을 쓸 수 없습니다.'
 class Cancel(Exception): pass
 class Fail(Exception): pass
 
@@ -165,7 +168,53 @@ def models(j, kinds):
             else: os.replace(tmp, dst)
     do(j, 'models', fn)
 
+def is_image(j): return os.path.splitext(j['src'])[1].lower() in IMAGE_EXT
+def set_label(j, key, text): next(x for x in j['task']['steps'] if x['key'] == key)['label'] = text
+
+# ---- photos: the same three modes, done by imgblur.py in the work folder "wi"
+def img_out(j, mode): ext = os.path.splitext(j['src'])[1].lower(); return jdir(j, 'out', mode + (ext if ext in ('.jpg', '.jpeg', '.png', '.webp') else '.png'))
+def img_result(j, mode, line, t0):
+    d = json.loads(line)
+    j['result'] = dict(mode=mode, image=True, a=0, b=0, size=d['size'], cover=[d['cover'], d['cover']], untouched=d['untouched'], exact=d.get('exact'), psnr=d.get('psnr'), fmt=os.path.splitext(img_out(j, mode))[1][1:].lower(), hidden=d['hidden'], took=round(time.time() - t0), run=int(time.time()),
+                       cmp=[dict(frame=0, t=0, a='wi/view.jpg', b='wi/out_view.jpg')])
+
+def t_analyze_image(j):
+    wi = jdir(j, 'wi')
+    def probe(s):
+        m = json.loads(sh(j, s, [PY, IMGBLUR, 'info', j['src'], wi])[-1]); os.makedirs(jdir(j, 'scrub'), exist_ok=True); shutil.copyfile(os.path.join(wi, 'thumb.jpg'), jdir(j, 'scrub', 's_0000.jpg'))
+        j['info'] = dict(W=m['W'], H=m['H'], frames=1, duration=0, dt=0, hdr=False, hdr10p=False, codec='image', bits=8, gamma=m['gamma'], scrub=dict(k=1, n=1), image=True)
+        j['pick'] = dict(a=0, b=0, step=1, gamma=m['gamma'], ready=True)
+    do(j, 'probe', probe); do(j, 'overview', lambda s: 'skip')
+
+def t_blur_image(j):
+    o = j['opts']; mode = o['mode']; wi = jdir(j, 'wi'); t0 = time.time(); g = float(o.get('gamma') or j['info']['gamma']); fj = os.path.join(wi, 'faces.json'); ran = []; L = {}
+    set_label(j, 'detect', '사람 찾기' if mode == 'people' else '얼굴 찾기'); set_label(j, 'render', '사진 만들기')
+    if mode == 'people' and importlib.util.find_spec('ultralytics') is None: raise Fail(NO_PEOPLE)
+    models(j, [mode])
+    def detect(s):
+        if os.path.exists(fj):
+            c = json.load(open(fj))
+            if abs(c.get('gamma', 0) - g) < 1e-6 and (c['people'] or mode == 'faces'): return 'skip'
+        ran.append(1); sh(j, s, [PY, IMGBLUR, 'detect', wi, '--gamma', str(g)] + (['--people'] if mode == 'people' else []))
+        shutil.rmtree(jdir(j, 'tiles'), ignore_errors=True); shutil.copytree(os.path.join(wi, 'tiles'), jdir(j, 'tiles'))
+    do(j, 'detect', detect)
+    F = json.load(open(fj))['faces']; j['suspects'] = [dict(id=f['id'], first=0, last=0, score=f['score'], auto=f['auto'], t=0) for f in F]      # for a photo every face can be switched
+    hide = {} if ran else {int(k): bool(v) for k, v in (o.get('hide') or {}).items() if str(k).isdigit()}
+    ids = [f['id'] for f in F if hide.get(f['id'], not f['auto'])]; os.makedirs(jdir(j, 'out'), exist_ok=True); out = img_out(j, mode)
+    do(j, 'render', lambda s: L.update(r=sh(j, s, [PY, IMGBLUR, 'render', wi, out, '--mode', mode, '--hide', ','.join(map(str, ids)), '--style', 'mosaic' if o.get('style') == 'mosaic' else 'blur'] + strength(j, o))))
+    img_result(j, mode, L['r'][-1], t0)
+
+def t_pick_image(j):
+    o = j['opts']; wi = jdir(j, 'wi'); t0 = time.time(); L = {}; set_label(j, 'render', '사진 만들기')
+    tg = [dict(pts=[[float(x), float(y)] for x, y in t.get('pts', [])], lab=[int(v) for v in t.get('lab', [])], **({'box': [float(v) for v in t['box']]} if t.get('box') else {})) for t in o['targets']]
+    if not tg: raise Fail('가릴 대상을 하나 이상 골라 주세요.')
+    models(j, ['pick']); tf = os.path.join(wi, 'targets.json'); os.makedirs(jdir(j, 'out'), exist_ok=True); out = img_out(j, 'pick')
+    with open(tf, 'w', encoding='utf-8') as f: json.dump(dict(targets=tg, crop=[int(v) for v in o['crop']] if o.get('crop') else None), f)
+    do(j, 'render', lambda s: L.update(r=sh(j, s, [PY, IMGBLUR, 'render', wi, out, '--mode', 'pick', '--targets', tf, '--style', 'mosaic' if o.get('style') == 'mosaic' else 'blur'] + strength(j, o))))
+    img_result(j, 'pick', L['r'][-1], t0)
+
 def t_analyze(j):
+    if is_image(j): return t_analyze_image(j)
     wb = jdir(j, 'wb')
     do(j, 'probe', lambda s: sh(j, s, [PY, BLURALL, 'probe', j['src'], wb]))
     def ov(s):
@@ -226,9 +275,10 @@ def tiles(j):
     return sorted(r, key=lambda x: x['first'])
 
 def t_blur(j):
+    if is_image(j): return t_blur_image(j)
     o = j['opts']; mode = o['mode']; wb = jdir(j, 'wb'); N = j['info']['frames']; t0 = time.time()
     a = max(0, min(N - 1, int(o.get('a', 0)))); b = max(a, min(N - 1, int(o.get('b', N - 1)))); g = float(o.get('gamma') or j['info']['gamma'])
-    if mode == 'people' and importlib.util.find_spec('ultralytics') is None: raise Fail('"모든 사람" 방식에 필요한 ultralytics 패키지가 없습니다. 앱을 끄고 앱 폴더의 .venv 폴더를 지운 뒤 run.bat(맥·리눅스는 run.sh)을 다시 실행하면 설치합니다.')
+    if mode == 'people' and importlib.util.find_spec('ultralytics') is None: raise Fail(NO_PEOPLE)
     next(x for x in j['task']['steps'] if x['key'] == 'detect')['label'] = '사람 찾기' if mode == 'people' else '얼굴 찾기'
     models(j, [mode]); dets = os.path.join(wb, 'dets.jsonl'); cfgp = os.path.join(wb, 'detect.json'); ran = []
     def detect(s):
@@ -284,6 +334,7 @@ def t_prepare(j):
     do(j, 'frames', fr)
 
 def t_pick(j):
+    if is_image(j): return t_pick_image(j)
     o = j['opts']; wv = jdir(j, 'wv'); p = j['pick']; a, b = p['a'], p['b']; t0 = time.time(); G = len(range(a, b + 1, p['step'])); L = {}
     tg = [dict(name=f'T{q + 1}', ref=int(t['ref']), pts=[[float(x), float(y)] for x, y in t.get('pts', [])], lab=[int(v) for v in t.get('lab', [])],
                **({'box': [float(v) for v in t['box']]} if t.get('box') else {})) for q, t in enumerate(o['targets'])]
@@ -314,8 +365,8 @@ def seed(j, q):
     if [n for n in NEED['pick'] if not have(n)]: raise Fail('SAM 모델 파일이 없습니다.')
     if not q.get('pts') and not q.get('box'): raise Fail('박스를 그리거나 점을 찍어 주세요.')
     with SAM:
-        vjob(j, [], q.get('crop'))
-        r = subprocess.run([PY, os.path.abspath(__file__), '--seed-worker', jdir(j, 'wv')], input=json.dumps(q), capture_output=True, text=True, encoding='utf-8', errors='replace',
+        if not is_image(j): vjob(j, [], q.get('crop'))
+        r = subprocess.run([PY, IMGBLUR, 'seed', jdir(j, 'wi')] if is_image(j) else [PY, os.path.abspath(__file__), '--seed-worker', jdir(j, 'wv')], input=json.dumps(q), capture_output=True, text=True, encoding='utf-8', errors='replace',
                            env=dict(os.environ, PYTHONIOENCODING='utf-8', VBLUR_MODELS=MODELS))
     try: d = json.loads(r.stdout.strip().splitlines()[-1])
     except Exception: raise Fail((r.stderr or r.stdout or '윤곽을 계산하지 못했습니다.').strip().splitlines()[-1])
@@ -379,11 +430,47 @@ def public(j, full=True):
                                     task=dict(kind=t['kind'], state=t['state'], step=next((s['label'] for s in t['steps'] if s['state'] == 'run'), None)) if t else None)
     return d
 
+# ---- access from other devices on the same network
+def lan_ip():
+    try: s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM); s.connect(('10.255.255.255', 1)); ip = s.getsockname()[0]; s.close()
+    except Exception: ip = None
+    if not ip or ip.startswith('127.') or ip == '0.0.0.0':
+        try: ip = next((x[4][0] for x in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET) if not x[4][0].startswith('127.')), None)
+        except Exception: ip = None
+    return ip
+
+def lan_on():
+    """a second listener on this machine's network address; the app itself keeps listening on 127.0.0.1 only. Every switch-on gets a new PIN."""
+    with LAN_LOCK:
+        if LAN['srv']: return
+        ip = lan_ip()
+        if not ip: raise Fail('이 기기의 네트워크 주소를 찾지 못했습니다. 와이파이나 유선 연결을 확인해 주세요.')
+        try: srv = ThreadingHTTPServer((ip, LAN['port']), H)
+        except OSError as e: raise Fail(f'{ip}:{LAN["port"]}에서 접속을 받을 수 없습니다. ({e})')
+        srv.daemon_threads = True; threading.Thread(target=srv.serve_forever, daemon=True).start()
+        AUTH.update(pin=f'{secrets.randbelow(10 ** 6):06d}', token=secrets.token_hex(16), fails=0); LAN.update(srv=srv, ip=ip)
+        print(f'다른 기기 접속을 켰습니다: http://{ip}:{LAN["port"]}   PIN: {AUTH["pin"]}', flush=True)
+
+def lan_off():
+    with LAN_LOCK:
+        srv = LAN['srv']
+        if not srv: return
+        LAN.update(srv=None, ip=None); AUTH.update(pin=None, token=secrets.token_hex(16), fails=0)      # devices that were signed in are signed out
+        srv.shutdown(); srv.server_close(); print('다른 기기 접속을 껐습니다.', flush=True)
+
+def lan_state(full): on = bool(LAN['srv']); return dict(on=on, url=f"http://{LAN['ip']}:{LAN['port']}" if on and full else None, pin=AUTH['pin'] if on and full else None)
+
 # ---- HTTP
 class H(BaseHTTPRequestHandler):
     protocol_version = 'HTTP/1.1'
     def log_message(self, *a): pass
     def local(self): return self.client_address[0] in ('127.0.0.1', '::1', '::ffff:127.0.0.1')
+    def host_ok(self):
+        """a page on some other website must not be able to reach this app through the browser of the person at this machine (DNS rebinding):
+        requests from this machine are only answered when they name it by a loopback address. Other devices are held back by the PIN instead."""
+        if not self.local(): return True
+        h = (self.headers.get('Host') or '').strip().lower(); h = h[1:h.index(']')] if h.startswith('[') and ']' in h else h.rsplit(':', 1)[0] if ':' in h else h
+        return h in ('127.0.0.1', 'localhost', '::1')
     def authed(self): return self.local() or (AUTH['pin'] and f"vbauth={AUTH['token']}" in (self.headers.get('Cookie') or ''))
     def out(self, code, body, ctype='application/json', extra=None):
         if isinstance(body, (dict, list)): body = json.dumps(body, ensure_ascii=False)
@@ -403,7 +490,7 @@ class H(BaseHTTPRequestHandler):
             else: a = max(0, size - int(m.group(2)))
             if a > b: return self.out(416, b'', 'text/plain', {'Content-Range': f'bytes */{size}'})
             code = 206
-        ext = os.path.splitext(path)[1].lower(); ctype = {'.jpg': 'image/jpeg', '.png': 'image/png', '.mp4': 'video/mp4'}.get(ext, 'application/octet-stream')
+        ext = os.path.splitext(path)[1].lower(); ctype = {'.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png', '.webp': 'image/webp', '.mp4': 'video/mp4'}.get(ext, 'application/octet-stream')
         self.send_response(code); self.send_header('Content-Type', ctype); self.send_header('Content-Length', str(b - a + 1)); self.send_header('Accept-Ranges', 'bytes')
         self.send_header('Cache-Control', 'no-store')
         if code == 206: self.send_header('Content-Range', f'bytes {a}-{b}/{size}')
@@ -421,15 +508,16 @@ class H(BaseHTTPRequestHandler):
     def do_GET(self):
         u = urllib.parse.urlsplit(self.path); p = u.path; q = urllib.parse.parse_qs(u.query)
         if p == '/favicon.ico': return self.out(204, b'', 'image/x-icon')
+        if not self.host_ok(): return self.out(403, '이 주소로는 열 수 없습니다. http://127.0.0.1:%d 로 열어 주세요.' % LAN['port'], 'text/plain; charset=utf-8')
         if p == '/login':
-            if AUTH['fails'] > 30: return self.out(403, 'PIN을 너무 많이 틀렸습니다. 앱을 다시 켜 주세요.', 'text/plain')
+            if AUTH['fails'] > 30: return self.out(403, 'PIN을 너무 많이 틀렸습니다. 앱을 켠 기기에서 다른 기기 접속을 껐다가 다시 켜 주세요.', 'text/plain; charset=utf-8')
             if AUTH['pin'] and q.get('pin', [''])[0] == AUTH['pin']: return self.out(303, b'', 'text/plain', {'Location': '/', 'Set-Cookie': f"vbauth={AUTH['token']}; Path=/; HttpOnly; SameSite=Strict"})
             AUTH['fails'] += 1; time.sleep(1); return self.out(303, b'', 'text/plain', {'Location': '/?wrong=1'})
         if not self.authed(): return self.out(200, LOGIN, 'text/html')
         if p == '/': return self.out(200, open(os.path.join(HERE, 'index.html'), 'rb').read(), 'text/html')
         if p == '/api/status':
             with LOCK: jobs = [public(j, False) for j in sorted(JOBS.values(), key=lambda x: -x['created'])]
-            return self.out(200, dict(tools=tools(), jobs=jobs, local=self.local(), busy=CUR['job'], cores=os.cpu_count() or 1))
+            return self.out(200, dict(tools=tools(), jobs=jobs, local=self.local(), lan=lan_state(self.local()), busy=CUR['job'], cores=os.cpu_count() or 1))
         m = re.match(r'/api/job/([\w-]+)(?:/(.*))?$', p); j = JOBS.get(m.group(1)) if m else None
         if not j: return self.err('없는 주소입니다.', 404)
         rest = m.group(2) or ''
@@ -437,9 +525,10 @@ class H(BaseHTTPRequestHandler):
         if rest == 'download':
             mode = q.get('mode', [(j.get('result') or {}).get('mode', '')])[0]
             if mode not in SUFFIX: return self.err('결과가 없습니다.', 404)
-            return self.file(jdir(j, 'out', mode + '.mp4'), f"{os.path.splitext(j['name'])[0]}_{SUFFIX[mode]}.mp4")
+            f = img_out(j, mode) if is_image(j) else jdir(j, 'out', mode + '.mp4')
+            return self.file(f, f"{os.path.splitext(j['name'])[0]}_{SUFFIX[mode]}{os.path.splitext(f)[1]}")
         if rest == 'frame':
-            f = jdir(j, 'wv', 'prev', f"f_{int(q.get('i', ['0'])[0]):05d}.jpg"); im = cv2.imread(f) if os.path.exists(f) else None
+            f = jdir(j, 'wi', 'view.jpg') if is_image(j) else jdir(j, 'wv', 'prev', f"f_{int(q.get('i', ['0'])[0]):05d}.jpg"); im = cv2.imread(f) if os.path.exists(f) else None
             if im is None: return self.err('이 프레임의 미리보기가 없습니다.', 404)
             w = max(160, min(1600, int(q.get('w', ['960'])[0]))); g = float((j.get('pick') or {}).get('gamma') or 1.0)
             if im.shape[1] > w: im = cv2.resize(im, (w, int(round(im.shape[0] * w / im.shape[1]))), interpolation=cv2.INTER_AREA)
@@ -447,19 +536,20 @@ class H(BaseHTTPRequestHandler):
             return self.out(200, cv2.imencode('.jpg', im, [cv2.IMWRITE_JPEG_QUALITY, 85])[1].tobytes(), 'image/jpeg')
         if rest.startswith('f/'):
             rel = rest[2:]
-            if not re.fullmatch(r'(scrub|cmp|tiles|wb)/[\w.]+\.jpg', rel) or '..' in rel: return self.err('없는 파일입니다.', 404)
+            if not re.fullmatch(r'(scrub|cmp|tiles|wb|wi)/[\w.]+\.jpg', rel) or '..' in rel: return self.err('없는 파일입니다.', 404)
             return self.file(jdir(j, *rel.split('/')))
         return self.err('없는 주소입니다.', 404)
 
     def do_POST(self):
         u = urllib.parse.urlsplit(self.path); p = u.path; q = urllib.parse.parse_qs(u.query)
-        if not self.authed() or self.headers.get('X-VB') != '1':
+        if not self.authed() or self.headers.get('X-VB') != '1' or not self.host_ok():
             self.close_connection = True; return self.err('권한이 없습니다.', 403)
         try:
             if p == '/api/upload':
                 name = q.get('name', ['video.mp4'])[0]; ext = os.path.splitext(name)[1].lower(); n = int(self.headers.get('Content-Length') or 0)
-                if ext not in VIDEO_EXT or n <= 0:
-                    self.close_connection = True; return self.err('영상 파일(mp4, mov 등)만 올릴 수 있습니다.')
+                if ext in ('.heic', '.heif'): self.close_connection = True; return self.err('HEIC 사진은 아직 읽지 못합니다. JPG로 바꿔서 올려 주세요.')
+                if ext not in VIDEO_EXT + IMAGE_EXT or n <= 0:
+                    self.close_connection = True; return self.err('영상(mp4, mov 등)이나 사진(jpg, png, webp) 파일만 올릴 수 있습니다.')
                 j = new_job(name); j['src'] = jdir(j, 'src', 'input' + ext); left = n
                 with open(j['src'], 'wb') as f:
                     while left > 0:
@@ -470,10 +560,15 @@ class H(BaseHTTPRequestHandler):
                     JOBS.pop(j['id'], None); shutil.rmtree(jdir(j), ignore_errors=True); self.close_connection = True; return self.err('업로드가 중간에 끊겼습니다.')
                 begin(j, 'analyze', ['probe', 'overview']); return self.out(200, dict(id=j['id']))
             d = self.body()
+            if p == '/api/lan':
+                if not self.local(): return self.err('이 설정은 앱을 켠 기기에서만 바꿀 수 있습니다.', 403)
+                try: lan_on() if d.get('on') else lan_off()
+                except Fail as e: return self.err(str(e))
+                return self.out(200, lan_state(True))
             if p == '/api/open':
                 path = os.path.abspath(os.path.expanduser(str(d.get('path', '')).strip().strip('"')))
                 if not self.local(): return self.err('파일 경로로 열기는 이 PC에서만 쓸 수 있습니다.', 403)
-                if not os.path.isfile(path) or os.path.splitext(path)[1].lower() not in VIDEO_EXT: return self.err('영상 파일을 찾을 수 없습니다: ' + path)
+                if not os.path.isfile(path) or os.path.splitext(path)[1].lower() not in VIDEO_EXT + IMAGE_EXT: return self.err('영상이나 사진 파일을 찾을 수 없습니다: ' + path)
                 j = new_job(path, path); begin(j, 'analyze', ['probe', 'overview']); return self.out(200, dict(id=j['id']))
             m = re.match(r'/api/job/([\w-]+)/(\w+)$', p); j = JOBS.get(m.group(1)) if m else None
             if not j: return self.err('없는 주소입니다.', 404)
@@ -493,11 +588,12 @@ class H(BaseHTTPRequestHandler):
             if not j.get('info'): return self.err('영상을 아직 읽는 중이거나 읽지 못했습니다.')
             if act == 'blur':
                 if d.get('mode') not in ('faces', 'people'): return self.err('방식을 골라 주세요.')
-                j['opts'] = d; begin(j, 'blur', ['models', 'detect', 'link', 'masks', 'render', 'check', 'residual', 'compare']); return self.out(200, dict(ok=True))
+                j['opts'] = d; begin(j, 'blur', ['models', 'detect', 'render'] if is_image(j) else ['models', 'detect', 'link', 'masks', 'render', 'check', 'residual', 'compare']); return self.out(200, dict(ok=True))
+            if act == 'prepare' and is_image(j): return self.out(200, dict(ok=True))
             if act == 'prepare': j['opts'] = dict(j.get('opts') or {}, **d); begin(j, 'prepare', ['models', 'frames']); return self.out(200, dict(ok=True))
             if act == 'pick':
                 if not (j.get('pick') or {}).get('ready'): return self.err('구간을 먼저 불러와 주세요.')
-                j['opts'] = dict(d, mode='pick'); begin(j, 'pick', ['models', 'embed', 'track', 'masks', 'render', 'check', 'compare']); return self.out(200, dict(ok=True))
+                j['opts'] = dict(d, mode='pick'); begin(j, 'pick', ['models', 'render'] if is_image(j) else ['models', 'embed', 'track', 'masks', 'render', 'check', 'compare']); return self.out(200, dict(ok=True))
             return self.err('없는 주소입니다.', 404)
         except (BrokenPipeError, ConnectionError): pass
         except Exception as e: return self.err(f'{type(e).__name__}: {e}', 500)
@@ -524,19 +620,20 @@ def main():
         try: s.reconfigure(encoding='utf-8', errors='replace')
         except Exception: pass
     tool_path(); load_jobs(); threading.Thread(target=worker, daemon=True).start()
-    srv = ThreadingHTTPServer(('0.0.0.0' if a.lan else '127.0.0.1', a.port), H); srv.daemon_threads = True; url = f'http://127.0.0.1:{a.port}'
-    print(f'video-blur 앱이 켜졌습니다. 이 PC에서: {url}')
+    srv = ThreadingHTTPServer(('127.0.0.1', a.port), H); srv.daemon_threads = True; url = f'http://127.0.0.1:{a.port}'; LAN['port'] = a.port
+    print(f'video-blur 앱이 켜졌습니다. 이 기기에서: {url}')
     print(f'영상과 작업 파일을 두는 곳: {DATA}')
     if a.lan:
-        AUTH['pin'] = f'{secrets.randbelow(10 ** 6):06d}'
-        try: s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM); s.connect(('10.255.255.255', 1)); ip = s.getsockname()[0]; s.close()
-        except Exception: ip = '(이 PC의 IP 주소)'
-        print(f'같은 와이파이의 다른 기기에서: http://{ip}:{a.port}   PIN: {AUTH["pin"]}')
+        try: lan_on()
+        except Fail as e: print('!! ' + str(e))
+    else: print('휴대폰 같은 다른 기기에서 쓰려면 앱 첫 화면의 "다른 기기에서 접속하기"에서 켭니다.')
     t = tools()
     if not t['ffmpeg']: print('!! ffmpeg를 찾을 수 없습니다. ffmpeg를 설치하고 PATH에 넣은 뒤 다시 켜 주세요.')
     print('끄려면 이 창에서 Ctrl+C')
     if not a.no_browser:
-        try: import webbrowser; threading.Timer(0.8, lambda: webbrowser.open(url)).start()
+        try:
+            if shutil.which('termux-open-url'): threading.Timer(1.5, lambda: subprocess.run(['termux-open-url', url])).start()      # Android (Termux)
+            else: import webbrowser; threading.Timer(0.8, lambda: webbrowser.open(url)).start()
         except Exception: pass
     try: srv.serve_forever()
     except KeyboardInterrupt: kill(CUR['proc']); print('\n앱을 껐습니다.')

@@ -5,7 +5,7 @@ rem lets the app's launch.py install the Python packages and ffmpeg, and opens t
 rem Run it again any time to start the app. To remove everything, delete the folder %LocalAppData%\video-blur.
 chcp 65001 >nul
 setlocal EnableExtensions
-set "VER=v1.0.0"
+set "VER=v1.1.0"
 set "APP=%LocalAppData%\video-blur"
 set "URL=https://raw.githubusercontent.com/songyb111-gachon/video-blur/%VER%/launch.py"
 if not exist "%APP%" mkdir "%APP%"
