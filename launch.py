@@ -4,18 +4,38 @@
 Run it with any Python 3.9+ (run.bat and run.sh do that). It uses only the standard library and, whenever something is missing:
   - creates a private Python environment in .venv and installs the packages there
   - installs ffmpeg (Windows: winget, or a download into tools/ if winget is not there; macOS: Homebrew; Linux: the system package manager)
-The model files are fetched later by the app itself, the first time a mode needs them."""
+The model files are fetched later by the app itself, the first time a mode needs them.
+
+The one-file starters on the Releases page download just this file and run it with "--install <version>": it then fetches the other
+app files of that version from GitHub into its own folder before doing the rest."""
 import os, sys, glob, shutil, zipfile, subprocess, urllib.request
 
 HERE = os.path.dirname(os.path.abspath(__file__)); WIN = os.name == 'nt'; MAC = sys.platform == 'darwin'
 VENV = os.path.join(HERE, '.venv'); VPY = os.path.join(VENV, 'Scripts', 'python.exe') if WIN else os.path.join(VENV, 'bin', 'python')
 TOOLS = os.path.join(HERE, 'tools', 'ffmpeg', 'bin')
+RAW = 'https://raw.githubusercontent.com/songyb111-gachon/video-blur/'
+APP_FILES = ['app.py', 'index.html', 'blurall.py', 'vblur.py', 'requirements.txt']
 FFMPEG_WIN_ZIP = 'https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip'   # one of the two Windows builds ffmpeg.org links to
 
 def say(s): print(s, flush=True)
 def die(s): say('\n' + s); sys.exit(1)
 def run(cmd): return subprocess.run(cmd).returncode == 0
 def ok(code): return subprocess.run([VPY, '-c', code], capture_output=True).returncode == 0
+
+def fetch_app(ver):
+    """one-file install: put the app files of this version next to this script (kept until a starter for another version is run)"""
+    mark = os.path.join(HERE, f'installed-{ver}.txt')
+    if os.path.exists(mark) and all(os.path.exists(os.path.join(HERE, f)) for f in APP_FILES): return
+    say(f'앱 파일을 내려받습니다 ({ver}).')
+    try:
+        for f in APP_FILES:
+            with urllib.request.urlopen(urllib.request.Request(RAW + ver + '/' + f, headers={'User-Agent': 'video-blur-app'}), timeout=60) as r: data = r.read()
+            if not data: raise ValueError(f + ' is empty')
+            with open(os.path.join(HERE, f + '.new'), 'wb') as o: o.write(data)
+    except Exception as e: die(f'앱 파일을 내려받지 못했습니다. 인터넷 연결을 확인하고 다시 실행해 주세요. ({e})')
+    for f in APP_FILES: os.replace(os.path.join(HERE, f + '.new'), os.path.join(HERE, f))
+    for old in glob.glob(os.path.join(HERE, 'installed-*.txt')): os.remove(old)
+    with open(mark, 'w') as o: o.write(ver)
 
 def venv():
     if os.path.exists(VPY) and ok('import sys'): return
@@ -92,8 +112,10 @@ def main():
         try: s.reconfigure(encoding='utf-8', errors='replace')
         except Exception: pass
     if sys.version_info < (3, 9): die(f'Python 3.9 이상이 필요합니다 (지금은 {sys.version.split()[0]}).')
+    args = sys.argv[1:]
+    if len(args) >= 2 and args[0] == '--install': fetch_app(args[1]); args = args[2:]
     os.chdir(HERE); venv(); packages(); ffmpeg()
-    try: sys.exit(subprocess.call([VPY, os.path.join(HERE, 'app.py')] + sys.argv[1:]))
+    try: sys.exit(subprocess.call([VPY, os.path.join(HERE, 'app.py')] + args))
     except KeyboardInterrupt: pass
 
 if __name__ == '__main__': main()
