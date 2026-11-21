@@ -62,6 +62,16 @@ def tools():
     except OSError: r['ffmpeg'] = False
     _TOOLS.update(t=time.time(), v=r); return r
 
+def ascii_dir(path):
+    """Windows only: OpenCV cannot open files whose path has non-ASCII letters (a Korean user name is enough), so use the folder's short 8.3 name, or failing that a public folder"""
+    if os.name != 'nt' or path.isascii(): return path
+    try:
+        import ctypes; os.makedirs(path, exist_ok=True); buf = ctypes.create_unicode_buffer(1024)
+        if ctypes.windll.kernel32.GetShortPathNameW(path, buf, 1024) and buf.value.isascii(): return buf.value
+    except Exception: pass
+    alt = os.path.join(os.environ.get('PUBLIC') or 'C:\\Users\\Public', 'video-blur-jobs')
+    return alt if alt.isascii() else path
+
 def tool_path():
     """if ffmpeg is not on PATH, use the copy launch.py installed (tools/ next to this file, or winget's folders on Windows)"""
     la = os.environ.get('LOCALAPPDATA', ''); cand = [os.path.join(HERE, 'tools', 'ffmpeg', 'bin')]
@@ -505,7 +515,7 @@ def main():
     ap.add_argument('--port', type=int, default=8765); ap.add_argument('--lan', action='store_true', help='let other devices on the same network connect (PIN required)')
     ap.add_argument('--data', default=DATA, help='folder for videos and work files'); ap.add_argument('--no-browser', action='store_true')
     ap.add_argument('--seed-worker', help=argparse.SUPPRESS)
-    a = ap.parse_args(); DATA = os.path.abspath(a.data)
+    a = ap.parse_args(); DATA = ascii_dir(os.path.abspath(a.data))
     if a.seed_worker:
         try: print(json.dumps(seed_worker(a.seed_worker)))
         except SystemExit as x: print(json.dumps(dict(error=str(x))))
@@ -516,6 +526,7 @@ def main():
     tool_path(); load_jobs(); threading.Thread(target=worker, daemon=True).start()
     srv = ThreadingHTTPServer(('0.0.0.0' if a.lan else '127.0.0.1', a.port), H); srv.daemon_threads = True; url = f'http://127.0.0.1:{a.port}'
     print(f'video-blur 앱이 켜졌습니다. 이 PC에서: {url}')
+    print(f'영상과 작업 파일을 두는 곳: {DATA}')
     if a.lan:
         AUTH['pin'] = f'{secrets.randbelow(10 ** 6):06d}'
         try: s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM); s.connect(('10.255.255.255', 1)); ip = s.getsockname()[0]; s.close()
