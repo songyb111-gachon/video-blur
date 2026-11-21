@@ -1,6 +1,9 @@
 __pycache__/
 *.pyc
-# work folders and media stay out of the repository
+.venv/
+tools/
+# videos, work folders and results of the app stay out of the repository
+jobs/
 work*/
 *.mp4
 *.mov
